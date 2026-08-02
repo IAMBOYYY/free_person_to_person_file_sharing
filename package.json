@@ -1,0 +1,24 @@
+{
+  "name": "optical-transfer",
+  "private": true,
+  "version": "1.0.0",
+  "license": "MIT",
+  "description": "Send files between two devices using only a screen and a camera — fountain-coded QR streaming.",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "fflate": "^0.8.0",
+    "qrcode": "^1.5.4",
+    "zxing-wasm": "^2.0.0"
+  },
+  "devDependencies": {
+    "@types/qrcode": "^1.5.5",
+    "@vitejs/plugin-basic-ssl": "^1.2.0",
+    "typescript": "^5.5.0",
+    "vite": "^6.0.0"
+  }
+}

@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Optical Transfer</title>
+  <link rel="stylesheet" href="shared/style.css" />
+  <link rel="manifest" href="manifest.json" />
+  <link rel="icon" href="icon-192.png" />
+  <link rel="apple-touch-icon" href="icon-192.png" />
+  <meta name="theme-color" content="#0B0E13" />
+</head>
+<body style="justify-content:center; gap:32px">
+  <h1>OPTICAL TRANSFER</h1>
+  <p style="color:var(--muted); max-width:480px; text-align:center">
+    Transfer files between two devices using only a screen and a camera — no Wi‑Fi, no Bluetooth.
+  </p>
+  <div style="display:flex; gap:20px; flex-wrap:wrap; justify-content:center">
+    <a href="send/" class="btn" style="font-size:1.1rem; padding: 16px 40px;">📤 Send</a>
+    <a href="receive/" class="btn" style="font-size:1.1rem; padding: 16px 40px;">📥 Receive</a>
+  </div>
+  <script>
+    if ("serviceWorker" in navigator) {
+      window.addEventListener("load", () => {
+        navigator.serviceWorker.register("sw.js").catch(() => {});
+      });
+    }
+  </script>
+</body>
+</html>
