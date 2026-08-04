@@ -314,3 +314,61 @@ details.advanced input[type="range"] {
     transition-duration: 0.01ms !important;
   }
 }
+/* Quick filters */
+.quick-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+.quick-filters button {
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border);
+  font-size: 0.85rem;
+  padding: 6px 14px;
+  border-radius: 20px;
+  font-weight: 500;
+}
+.quick-filters button.selected {
+  background: var(--accent);
+  color: var(--bg);
+  border-color: var(--accent);
+}
+
+/* Audio progress */
+.audio-progress {
+  width: min(80vw, 400px);
+  height: 12px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  overflow: hidden;
+}
+.audio-progress-bar {
+  height: 100%;
+  background: var(--accent);
+  transition: width 0.3s;
+}
+
+/* Chat bubble */
+.chat-bubble {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 16px;
+  margin: 8px 0;
+  max-width: 100%;
+}
+.bubble-content {
+  white-space: pre-wrap;
+  font-family: var(--font-ui);
+  line-height: 1.6;
+}
+
+/* Grid container for multi‑QR (the qr-stage already exists, we just need the grid inside) */
+#qr-container {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}

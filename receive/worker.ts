@@ -13,15 +13,19 @@ ctx.onmessage = async (e: MessageEvent) => {
   const { id, buf, w, h } = e.data;
   try {
     const img = new ImageData(new Uint8ClampedArray(buf), w, h);
-    const results = await readBarcodes(img, { formats: ["QRCode"], maxNumberOfSymbols: 1 });
-    const r = results.find(x => x.isValid && x.bytes.length > 0);
-    ctx.postMessage({ id, bytes: r ? r.bytes : null });
+    // formats + tryHarder is enough; maxNumberOfSymbols already defaults to 255,
+    // comfortably covering any grid size we'd realistically show on screen
+    const results = await readBarcodes(img, { formats: ["QRCode"] });
+    const bytesList = results
+      .filter(r => r.isValid && r.bytes.length > 0)
+      .map(r => r.bytes);
+    ctx.postMessage({ id, bytesList }, bytesList.map(b => b.buffer)); // transfer buffers
   } catch {
-    ctx.postMessage({ id, bytes: null });
+    ctx.postMessage({ id, bytesList: [] });
   }
 };
 
 // warm
-void readBarcodes(new ImageData(8,8), { formats: ["QRCode"] })
+void readBarcodes(new ImageData(8, 8), { formats: ["QRCode"] })
   .catch(() => undefined)
-  .then(() => ctx.postMessage({ id: -1, bytes: null }));
+  .then(() => ctx.postMessage({ id: -1, bytesList: [] }));

@@ -9,23 +9,47 @@
 <body>
   <h1>OPTICAL TRANSFER</h1>
 
-  <!-- Step 1: File selection -->
+  <!-- Step 1: Content selection (file or message) -->
   <div id="step-files" class="card" style="width: min(92vw, 560px)">
-    <p style="margin-bottom: 12px">Select files to send</p>
-    <div id="dropzone" class="file-drop" style="
-      border: 2px dashed var(--border); border-radius: var(--radius);
-      padding: 30px; text-align: center; cursor: pointer; margin-bottom: 12px;
-    ">
-      <p>Drop files here or click to browse</p>
-      <input type="file" id="file-input" multiple style="display:none" />
+    <div style="display:flex; gap:8px; margin-bottom:12px; justify-content:center">
+      <button id="type-file" class="selected" style="flex:1">File</button>
+      <button id="type-message" style="flex:1">Message</button>
     </div>
-    <ul id="file-list" class="file-list"></ul>
-    <p id="total-size" style="color:var(--muted); font-size:0.9rem; margin:8px 0"></p>
+
+    <!-- File picker area -->
+    <div id="file-area">
+      <!-- Quick filters -->
+      <div class="quick-filters">
+        <button class="filter-btn" data-accept="image/*">Photos</button>
+        <button class="filter-btn" data-accept="video/*">Videos</button>
+        <button class="filter-btn" data-accept=".pdf,.doc,.docx,.txt,.xls,.xlsx,.ppt,.pptx,.csv">Documents</button>
+        <button class="filter-btn" data-accept=".apk,application/vnd.android.package-archive">APK</button>
+        <button class="filter-btn selected" data-accept="">Any file</button>
+      </div>
+
+      <div id="dropzone" style="
+        border: 2px dashed var(--border); border-radius: var(--radius);
+        padding: 30px; text-align: center; cursor: pointer; margin:12px 0;
+      ">
+        <p>Drop files here or click to browse</p>
+        <input type="file" id="file-input" multiple style="display:none" />
+      </div>
+      <ul id="file-list" class="file-list"></ul>
+      <p id="total-size" style="color:var(--muted); font-size:0.9rem; margin:8px 0"></p>
+    </div>
+
+    <!-- Message area (hidden by default) -->
+    <div id="message-area" style="display:none">
+      <textarea id="message-text" placeholder="Type your message here…" style="width:100%; height:120px; resize:vertical"></textarea>
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-top:8px">
+        <span id="char-count" style="color:var(--muted)">0 characters</span>
+      </div>
+    </div>
   </div>
 
-  <!-- Step 2: Mode & code -->
+  <!-- Step 2: Mode & code & transport -->
   <div id="step-mode" class="card" style="width: min(92vw, 560px); display:none;">
-    <p style="margin-bottom: 12px">Transfer mode</p>
+    <p style="margin-bottom:12px">Transfer mode</p>
     <div style="display:flex; gap:12px; align-items:center; margin-bottom:12px">
       <button id="mode-public" class="selected" style="flex:1">Public</button>
       <button id="mode-private" style="flex:1">Private</button>
@@ -33,16 +57,23 @@
     <div id="code-box" style="display:none">
       <label style="display:block; margin-bottom:4px; color:var(--muted)">Access code (min 4 chars)</label>
       <input type="text" id="access-code" placeholder="e.g. p4ssw0rd" style="width:100%" />
-      <p style="font-size:0.8rem; color:var(--muted); margin-top:6px">
-        Share this code with the receiver before they scan.
-      </p>
+      <p style="font-size:0.8rem; color:var(--muted); margin-top:6px">Share this code with the receiver before they scan.</p>
     </div>
+
+    <div style="display:flex; gap:12px; align-items:center; margin-bottom:12px">
+      <span style="color:var(--muted)">Transport:</span>
+      <button id="transport-qr" class="selected" style="flex:1">QR</button>
+      <button id="transport-audio" style="flex:1">Audio</button>
+    </div>
+    <p id="audio-note" style="font-size:0.8rem; color:var(--muted); margin-bottom:8px; display:none">
+      Audio mode works great for short messages — for files, use QR.
+    </p>
   </div>
 
-  <!-- Step 3: Transmitting -->
+  <!-- Step 3: Transmitting (QR) -->
   <div id="step-transmit" style="display:none; width:100%; align-items:center; flex-direction:column; gap:16px">
     <div class="badge" id="mode-badge">Public</div>
-    <div class="qr-stage"><canvas id="qr" width="16" height="16"></canvas></div>
+    <div id="qr-container" class="qr-stage"><canvas id="qr" width="16" height="16"></canvas></div>
     <div class="metrics" id="metrics">
       <div class="metric"><div class="k">TX fps</div><div class="v accent" id="m-fps">—</div></div>
       <div class="metric"><div class="k">payload</div><div class="v" id="m-payload">—</div></div>
@@ -51,7 +82,6 @@
     <p id="status-hint" class="hint"></p>
     <button id="cancel-send" class="danger">Cancel</button>
 
-    <!-- Advanced settings (collapsed) -->
     <details class="advanced">
       <summary>Advanced</summary>
       <div class="row">
@@ -59,8 +89,19 @@
         <label>tx fps <select id="cfg-fps"></select></label>
         <label>error correction <select id="cfg-ecc"></select></label>
         <label>display size <input type="range" id="cfg-size" min="300" max="1200" step="50" value="800"></label>
+        <label>grid size <select id="cfg-grid"></select></label>
       </div>
     </details>
+  </div>
+
+  <!-- Step 3b: Transmitting (audio) -->
+  <div id="step-audio-send" style="display:none; width:100%; align-items:center; flex-direction:column; gap:16px">
+    <div class="badge" id="mode-badge-audio">Public</div>
+    <div class="audio-progress">
+      <div class="audio-progress-bar" id="audio-bar" style="width:0%"></div>
+    </div>
+    <p id="audio-send-status" class="hint">Playing sound…</p>
+    <button id="cancel-audio-send" class="danger">Cancel</button>
   </div>
 
   <script type="module" src="./main.ts"></script>
