@@ -3,6 +3,10 @@ import { fnv1a, parseFrame } from "../shared/protocol";
 import { decryptPayload } from "../shared/crypto";
 import { unpackEnvelope, extractFiles } from "../shared/envelope";
 import { initGgwave, decodeAudio, getSampleRate } from "../shared/audio";
+import { decodeImageFile, decodeImageData } from "../shared/qrImage";
+import { unzipSync } from "../shared/zip";
+import { audioFileToFloatArray } from "../shared/wav";
+import { isLiveFrame, unpackLiveFrame } from "../shared/live";
 
 const OVERHEAD_EST = 1.18;
 
@@ -22,6 +26,22 @@ const progressEl = document.getElementById("progress")!;
 const progressLabel = document.getElementById("progress-label")!;
 const audioStatus = document.getElementById("audio-receive-status")!;
 const metric = (id: string) => document.getElementById(id)!;
+const uploadQrBtn = document.getElementById("upload-qr-btn")!;
+const uploadQrInput = document.getElementById("upload-qr-input") as HTMLInputElement;
+const uploadAudioBtn = document.getElementById("upload-audio-btn")!;
+const uploadAudioInput = document.getElementById("upload-audio-input") as HTMLInputElement;
+const uploadStatus = document.getElementById("upload-status")!;
+
+// Live receive
+const liveReceiveBtn = document.getElementById("live-receive-btn")!;
+const stepLiveReceive = document.getElementById("step-live-receive")!;
+const liveRecvCameraBtn = document.getElementById("live-recv-camera-btn")!;
+const liveRecvMicBtn = document.getElementById("live-recv-mic-btn")!;
+const liveRecvCameraView = document.getElementById("live-recv-camera-view")!;
+const liveVideo = document.getElementById("live-video") as HTMLVideoElement;
+const liveRecvBubble = document.getElementById("live-recv-bubble")!;
+const liveRecvBubbleContent = liveRecvBubble.querySelector(".bubble-content") as HTMLElement;
+const liveRecvStopBtn = document.getElementById("live-recv-stop")!;
 
 let stream: MediaStream | null = null;
 let audioStream: MediaStream | null = null;
@@ -369,3 +389,198 @@ function formatSize(b: number) {
   if (b < 1048576) return `${(b/1024).toFixed(1)} KB`;
   return `${(b/1048576).toFixed(2)} MB`;
 }
+
+// --- Upload QR image(s) or a .zip of them ---
+uploadQrBtn.addEventListener("click", () => uploadQrInput.click());
+uploadQrInput.addEventListener("change", async () => {
+  const files = Array.from(uploadQrInput.files ?? []);
+  if (!files.length) return;
+  stepStart.style.display = "none";
+  stepReceive.style.display = "flex";
+  uploadStatus.style.display = "block";
+  uploadStatus.textContent = "Decoding uploaded file(s)…";
+
+  try {
+    const images: { name: string; data: Uint8Array }[] = [];
+    for (const f of files) {
+      if (f.name.toLowerCase().endsWith(".zip")) {
+        const buf = new Uint8Array(await f.arrayBuffer());
+        const unzipped = unzipSync(buf);
+        for (const [name, data] of Object.entries(unzipped)) {
+          images.push({ name, data: data as Uint8Array });
+        }
+      } else {
+        images.push({ name: f.name, data: new Uint8Array(await f.arrayBuffer()) });
+      }
+    }
+    let decodedCount = 0;
+    for (const img of images) {
+      const asFile = new File([img.data as BlobPart], img.name);
+      const bytes = await decodeImageFile(asFile);
+      if (bytes) {
+        decodedCount++;
+        onDecoded(bytes); // exact same per-frame handler the camera path uses
+      }
+    }
+    uploadStatus.textContent = decodedCount
+      ? `Decoded ${decodedCount}/${images.length} image(s).`
+      : "✗ Couldn't read any QR codes in the upload.";
+  } catch (err) {
+    uploadStatus.textContent = `✗ Couldn't process upload: ${err}`;
+  }
+  uploadQrInput.value = "";
+});
+
+// --- Upload an audio file ---
+uploadAudioBtn.addEventListener("click", () => uploadAudioInput.click());
+uploadAudioInput.addEventListener("change", async () => {
+  const file = uploadAudioInput.files?.[0];
+  if (!file) return;
+  stepStart.style.display = "none";
+  stepAudioReceive.style.display = "flex";
+  audioStatus.textContent = "Decoding uploaded audio…";
+  try {
+    await initGgwave();
+    const sampleRate = getSampleRate();
+    const samples = await audioFileToFloatArray(file, sampleRate);
+    const res = decodeAudio(samples);
+    if (res) {
+      void onAudioDecoded(res);
+    } else {
+      audioStatus.textContent = "✗ Couldn't detect a message in that audio file.";
+    }
+  } catch (err) {
+    audioStatus.textContent = `✗ ${err}`;
+  }
+  uploadAudioInput.value = "";
+});
+
+// --- Live receive (separate, self-contained — does not touch the normal
+// fountain-transfer flow above) ---
+let liveRecvMode: "camera" | "mic" = "camera";
+let liveRecvActive = false;
+let liveRecvStream: MediaStream | null = null;
+let liveRecvAudioStream: MediaStream | null = null;
+let liveRecvAudioContext: AudioContext | null = null;
+let liveRecvScriptNode: ScriptProcessorNode | null = null;
+let liveRecvPollTimer: ReturnType<typeof setInterval> | null = null;
+
+liveReceiveBtn.addEventListener("click", () => {
+  stepStart.style.display = "none";
+  stepLiveReceive.style.display = "flex";
+  liveRecvActive = true;
+  void startLiveCamera();
+});
+
+liveRecvCameraBtn.addEventListener("click", () => {
+  if (liveRecvMode === "camera") return;
+  liveRecvMode = "camera";
+  liveRecvCameraBtn.classList.add("selected");
+  liveRecvMicBtn.classList.remove("selected");
+  stopLiveMic();
+  void startLiveCamera();
+});
+liveRecvMicBtn.addEventListener("click", () => {
+  if (liveRecvMode === "mic") return;
+  liveRecvMode = "mic";
+  liveRecvMicBtn.classList.add("selected");
+  liveRecvCameraBtn.classList.remove("selected");
+  stopLiveCamera();
+  void startLiveMic();
+});
+
+async function startLiveCamera() {
+  liveRecvCameraView.style.display = "block";
+  try {
+    liveRecvStream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: "environment" }, audio: false,
+    });
+  } catch {
+    liveRecvBubbleContent.textContent = "✗ Camera permission denied.";
+    return;
+  }
+  liveVideo.srcObject = liveRecvStream;
+  await liveVideo.play().catch(() => {});
+  const canvas = document.createElement("canvas");
+  liveRecvPollTimer = setInterval(async () => {
+    if (!liveRecvActive || liveRecvMode !== "camera") return;
+    const vw = liveVideo.videoWidth, vh = liveVideo.videoHeight;
+    if (!vw || !vh) return;
+    canvas.width = vw; canvas.height = vh;
+    const ctx = canvas.getContext("2d", { willReadFrequently: true })!;
+    ctx.drawImage(liveVideo, 0, 0);
+    const imgData = ctx.getImageData(0, 0, vw, vh);
+    try {
+      const bytes = await decodeImageData(imgData);
+      if (bytes && isLiveFrame(bytes)) {
+        liveRecvBubbleContent.textContent = unpackLiveFrame(bytes);
+      }
+    } catch {}
+  }, 400); // live text doesn't need camera-speed polling
+}
+
+function stopLiveCamera() {
+  if (liveRecvPollTimer) { clearInterval(liveRecvPollTimer); liveRecvPollTimer = null; }
+  liveRecvStream?.getTracks().forEach(t => t.stop());
+  liveRecvStream = null;
+  liveRecvCameraView.style.display = "none";
+}
+
+async function startLiveMic() {
+  try {
+    liveRecvAudioStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+  } catch {
+    liveRecvBubbleContent.textContent = "✗ Microphone permission denied.";
+    return;
+  }
+  await initGgwave();
+  const sampleRate = getSampleRate();
+  liveRecvAudioContext = new AudioContext({ sampleRate });
+  if (liveRecvAudioContext.state === "suspended") await liveRecvAudioContext.resume();
+  const source = liveRecvAudioContext.createMediaStreamSource(liveRecvAudioStream);
+  liveRecvScriptNode = liveRecvAudioContext.createScriptProcessor(4096, 1, 1);
+  source.connect(liveRecvScriptNode);
+  liveRecvScriptNode.connect(liveRecvAudioContext.destination);
+
+  let accumulated = new Float32Array(0);
+  let lastDecode = performance.now();
+  const maxSamples = sampleRate * 5;
+
+  liveRecvScriptNode.onaudioprocess = (e) => {
+    if (!liveRecvActive || liveRecvMode !== "mic") return;
+    const input = e.inputBuffer.getChannelData(0);
+    const newArr = new Float32Array(accumulated.length + input.length);
+    newArr.set(accumulated);
+    newArr.set(input, accumulated.length);
+    accumulated = newArr.length > maxSamples ? newArr.subarray(newArr.length - maxSamples) : newArr;
+
+    if (performance.now() - lastDecode > 300) {
+      lastDecode = performance.now();
+      try {
+        const res = decodeAudio(accumulated);
+        if (res && isLiveFrame(res)) {
+          liveRecvBubbleContent.textContent = unpackLiveFrame(res);
+          accumulated = new Float32Array(0); // avoid immediately re-decoding the same chirp
+        }
+      } catch {}
+    }
+  };
+}
+
+function stopLiveMic() {
+  liveRecvScriptNode?.disconnect();
+  liveRecvScriptNode = null;
+  liveRecvAudioContext?.close();
+  liveRecvAudioContext = null;
+  liveRecvAudioStream?.getTracks().forEach(t => t.stop());
+  liveRecvAudioStream = null;
+}
+
+liveRecvStopBtn.addEventListener("click", () => {
+  liveRecvActive = false;
+  stopLiveCamera();
+  stopLiveMic();
+  stepLiveReceive.style.display = "none";
+  stepStart.style.display = "block";
+  liveRecvBubbleContent.textContent = "Waiting for live text…";
+});

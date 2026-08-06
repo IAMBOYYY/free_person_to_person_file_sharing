@@ -3,7 +3,11 @@ import { LTEncoder } from "../shared/fountain";
 import { HEADER_LEN, fnv1a, packFrame, type FrameHeader } from "../shared/protocol";
 import { createEnvelope } from "../shared/envelope";
 import { encryptPayload } from "../shared/crypto";
-import { initGgwave, encodeAudio, getSampleRate } from "../shared/audio";
+import { initGgwave, encodeAudio, getSampleRate, AUDIO_PROTOCOLS } from "../shared/audio";
+import { frameToPngBlob } from "../shared/qrImage";
+import { zipSync } from "../shared/zip";
+import { floatArrayToWavBlob } from "../shared/wav";
+import { packLiveFrame } from "../shared/live";
 
 const MARGIN = 4;
 const LOOKAHEAD = 3;
@@ -37,6 +41,22 @@ const cfgFps = document.getElementById("cfg-fps") as HTMLSelectElement;
 const cfgEcc = document.getElementById("cfg-ecc") as HTMLSelectElement;
 const cfgSize = document.getElementById("cfg-size") as HTMLInputElement;
 const cfgGrid = document.getElementById("cfg-grid") as HTMLSelectElement;
+const downloadQrBtn = document.getElementById("download-qr") as HTMLButtonElement;
+const downloadAudioBtn = document.getElementById("download-audio") as HTMLButtonElement;
+const audioProtocolBox = document.getElementById("audio-protocol-box")!;
+const audioProtocolSelect = document.getElementById("audio-protocol") as HTMLSelectElement;
+const audioProtocolHint = document.getElementById("audio-protocol-hint")!;
+
+// Live mode
+const typeLiveBtn = document.getElementById("type-live")!;
+const stepLive = document.getElementById("step-live")!;
+const liveText = document.getElementById("live-text") as HTMLTextAreaElement;
+const liveTransportQrBtn = document.getElementById("live-transport-qr")!;
+const liveTransportAudioBtn = document.getElementById("live-transport-audio")!;
+const liveQrView = document.getElementById("live-qr-view")!;
+const liveQrCanvas = document.getElementById("live-qr-canvas") as HTMLCanvasElement;
+const liveAudioStatus = document.getElementById("live-audio-status")!;
+const liveStopBtn = document.getElementById("live-stop")!;
 
 // Toggle mode
 const typeFileBtn = document.getElementById("type-file")!;
@@ -57,6 +77,19 @@ let currentAccept = "";
 let gridSize = 1;
 let gridCanvases: HTMLCanvasElement[] = [];
 let stagingCanvases: HTMLCanvasElement[] = [];
+
+// Remembers the most recently started transfer so the download buttons
+// (which live outside startQRSend/startAudioSend's own scope) can reach it.
+let lastEncoder: LTEncoder | null = null;
+let lastHeader: FrameHeader | null = null;
+let lastAudioPayload: Uint8Array | null = null;
+let lastAudioProtocolKey = "AUDIBLE_FAST";
+
+// Live mode state
+let liveTransport: "qr" | "audio" = "qr";
+let liveAudioContext: AudioContext | null = null;
+let liveAudioSource: AudioBufferSourceNode | null = null;
+let liveDebounceTimer: ReturnType<typeof setTimeout> | null = null;
 
 // Filter buttons
 document.querySelectorAll(".filter-btn").forEach(btn => {
@@ -112,17 +145,30 @@ typeFileBtn.addEventListener("click", () => {
   contentMode = "file";
   typeFileBtn.classList.add("selected");
   typeMessageBtn.classList.remove("selected");
+  typeLiveBtn.classList.remove("selected");
   fileArea.style.display = "block";
   messageArea.style.display = "none";
   stepMode.style.display = selectedFiles.length ? "block" : "none";
+  stepLive.style.display = "none";
 });
 typeMessageBtn.addEventListener("click", () => {
   contentMode = "message";
   typeMessageBtn.classList.add("selected");
   typeFileBtn.classList.remove("selected");
+  typeLiveBtn.classList.remove("selected");
   fileArea.style.display = "none";
   messageArea.style.display = "block";
   stepMode.style.display = "block";
+  stepLive.style.display = "none";
+});
+typeLiveBtn.addEventListener("click", async () => {
+  typeLiveBtn.classList.add("selected");
+  typeFileBtn.classList.remove("selected");
+  typeMessageBtn.classList.remove("selected");
+  stepFiles.style.display = "none";
+  stepMode.style.display = "none";
+  stepLive.style.display = "flex";
+  await initGgwave(); // live audio needs this ready before first keystroke
 });
 messageText.addEventListener("input", () => {
   charCount.textContent = `${messageText.value.length} characters`;
@@ -148,12 +194,28 @@ transportQrBtn.addEventListener("click", () => {
   transportQrBtn.classList.add("selected");
   transportAudioBtn.classList.remove("selected");
   audioNote.style.display = "none";
+  audioProtocolBox.style.display = "none";
 });
-transportAudioBtn.addEventListener("click", () => {
+transportAudioBtn.addEventListener("click", async () => {
   transport = "audio";
   transportAudioBtn.classList.add("selected");
   transportQrBtn.classList.remove("selected");
   audioNote.style.display = "block";
+  audioProtocolBox.style.display = "block";
+  await initGgwave();
+  if (!audioProtocolSelect.options.length) {
+    for (const [key, opt] of Object.entries(AUDIO_PROTOCOLS)) {
+      const el = document.createElement("option");
+      el.value = key;
+      el.textContent = opt.label;
+      if (key === "AUDIBLE_FAST") el.selected = true;
+      audioProtocolSelect.appendChild(el);
+    }
+    audioProtocolHint.textContent = AUDIO_PROTOCOLS.AUDIBLE_FAST?.hint ?? "";
+    audioProtocolSelect.addEventListener("change", () => {
+      audioProtocolHint.textContent = AUDIO_PROTOCOLS[audioProtocolSelect.value]?.hint ?? "";
+    });
+  }
 });
 
 // Send button
@@ -245,6 +307,8 @@ async function startQRSend(files: File[]) {
   const header: FrameHeader = {
     sessionId, seq: 0, k: encoder.k, blockLen, totalLen: payload.length, payloadFnv, flags,
   };
+  lastEncoder = encoder;
+  lastHeader = header;
 
   streamAborted = false;
   generation++;
@@ -419,7 +483,9 @@ async function startAudioSend(files: File[]) {
   finalPayload.set(payload, 1);
 
   await initGgwave();
-  const waveform = encodeAudio(finalPayload);
+  lastAudioPayload = finalPayload;
+  lastAudioProtocolKey = audioProtocolSelect.value || "AUDIBLE_FAST";
+  const waveform = encodeAudio(finalPayload, lastAudioProtocolKey);
   const sampleRate = getSampleRate();
 
   // Play
@@ -451,6 +517,120 @@ async function startAudioSend(files: File[]) {
     audioBar.style.width = "100%";
   };
 }
+
+// --- Downloads ---
+function triggerDownload(blob: Blob, filename: string) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+downloadQrBtn.addEventListener("click", async () => {
+  if (!lastEncoder || !lastHeader) return;
+  downloadQrBtn.disabled = true;
+  const originalLabel = downloadQrBtn.textContent;
+  downloadQrBtn.textContent = "Preparing…";
+  try {
+    const k = lastHeader.k;
+    // Generous redundancy since a static download has no chance to "wait for
+    // one more frame" the way a live camera scan does — better to overshoot.
+    const frameCount = Math.max(k + 3, Math.ceil(k * 1.4));
+    if (frameCount === 1) {
+      const bytes = packFrame({ ...lastHeader, seq: 0 }, lastEncoder.encode(0));
+      const blob = await frameToPngBlob(bytes);
+      triggerDownload(blob, "qr-code.png");
+    } else {
+      const files: Record<string, Uint8Array> = {};
+      for (let seq = 0; seq < frameCount; seq++) {
+        const bytes = packFrame({ ...lastHeader, seq }, lastEncoder.encode(seq));
+        const blob = await frameToPngBlob(bytes);
+        files[`frame-${String(seq).padStart(4, "0")}.png`] = new Uint8Array(await blob.arrayBuffer());
+      }
+      const zipped = zipSync(files);
+      triggerDownload(new Blob([zipped as BlobPart], { type: "application/zip" }), "qr-codes.zip");
+    }
+  } catch (err) {
+    alert(`Couldn't prepare download: ${err}`);
+  } finally {
+    downloadQrBtn.disabled = false;
+    downloadQrBtn.textContent = originalLabel;
+  }
+});
+
+downloadAudioBtn.addEventListener("click", () => {
+  if (!lastAudioPayload) return;
+  const waveform = encodeAudio(lastAudioPayload, lastAudioProtocolKey);
+  const blob = floatArrayToWavBlob(waveform, getSampleRate());
+  triggerDownload(blob, "message.wav");
+});
+
+// --- Live mode ---
+function scheduleLiveUpdate() {
+  if (liveDebounceTimer) clearTimeout(liveDebounceTimer);
+  liveDebounceTimer = setTimeout(() => { void sendLiveSnapshot(); }, 150);
+}
+liveText.addEventListener("input", scheduleLiveUpdate);
+
+liveTransportQrBtn.addEventListener("click", () => {
+  liveTransport = "qr";
+  liveTransportQrBtn.classList.add("selected");
+  liveTransportAudioBtn.classList.remove("selected");
+  liveAudioStatus.style.display = "none";
+  scheduleLiveUpdate();
+});
+liveTransportAudioBtn.addEventListener("click", () => {
+  liveTransport = "audio";
+  liveTransportAudioBtn.classList.add("selected");
+  liveTransportQrBtn.classList.remove("selected");
+  liveQrView.style.display = "none";
+  liveAudioStatus.style.display = "block";
+  scheduleLiveUpdate();
+});
+
+async function sendLiveSnapshot() {
+  const text = liveText.value;
+  if (!text) { liveQrView.style.display = "none"; return; }
+  const frame = packLiveFrame(text);
+
+  if (liveTransport === "qr") {
+    liveQrView.style.display = "block";
+    await QRCode.toCanvas(liveQrCanvas, [{ data: frame, mode: "byte" } as any], {
+      errorCorrectionLevel: "M",
+      margin: 2,
+      width: Math.min(window.innerWidth - 64, 320),
+    });
+  } else {
+    await initGgwave();
+    const waveform = encodeAudio(frame, "AUDIBLE_FAST");
+    const sampleRate = getSampleRate();
+    if (!liveAudioContext) liveAudioContext = new AudioContext({ sampleRate });
+    if (liveAudioContext.state === "suspended") await liveAudioContext.resume();
+    if (liveAudioSource) { try { liveAudioSource.stop(); } catch {} }
+    const buffer = liveAudioContext.createBuffer(1, waveform.length, sampleRate);
+    buffer.getChannelData(0).set(waveform);
+    liveAudioSource = liveAudioContext.createBufferSource();
+    liveAudioSource.buffer = buffer;
+    liveAudioSource.connect(liveAudioContext.destination);
+    liveAudioSource.start();
+    liveAudioStatus.textContent = "Replaying as you type…";
+  }
+}
+
+liveStopBtn.addEventListener("click", () => {
+  if (liveDebounceTimer) clearTimeout(liveDebounceTimer);
+  if (liveAudioSource) { try { liveAudioSource.stop(); } catch {} liveAudioSource = null; }
+  if (liveAudioContext) { liveAudioContext.close(); liveAudioContext = null; }
+  liveText.value = "";
+  liveQrView.style.display = "none";
+  stepLive.style.display = "none";
+  stepFiles.style.display = "block";
+  stepMode.style.display = selectedFiles.length || contentMode === "message" ? "block" : "none";
+});
 
 // Cancel buttons
 cancelBtn.addEventListener("click", () => { streamAborted = true; generation++; stepFiles.style.display = "block"; stepMode.style.display = selectedFiles.length || contentMode==="message" ? "block":"none"; stepTransmit.style.display = "none"; });

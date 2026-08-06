@@ -14,6 +14,7 @@
     <div style="display:flex; gap:8px; margin-bottom:12px; justify-content:center">
       <button id="type-file" class="selected" style="flex:1">File</button>
       <button id="type-message" style="flex:1">Message</button>
+      <button id="type-live" style="flex:1">Live</button>
     </div>
 
     <!-- File picker area -->
@@ -68,6 +69,12 @@
     <p id="audio-note" style="font-size:0.8rem; color:var(--muted); margin-bottom:8px; display:none">
       Audio mode works great for short messages — for files, use QR.
     </p>
+    <div id="audio-protocol-box" style="display:none; margin-bottom:8px">
+      <label style="display:block; margin-bottom:4px; color:var(--muted)">Audio speed / frequency</label>
+      <select id="audio-protocol" style="width:100%"></select>
+      <p id="audio-protocol-hint" class="hint" style="text-align:left; margin-top:4px"></p>
+      <p class="hint" style="text-align:left; margin-top:2px">The receiver doesn't need to match this — it detects automatically.</p>
+    </div>
   </div>
 
   <!-- Step 3: Transmitting (QR) -->
@@ -80,7 +87,10 @@
       <div class="metric"><div class="k">blocks</div><div class="v" id="m-k">—</div></div>
     </div>
     <p id="status-hint" class="hint"></p>
-    <button id="cancel-send" class="danger">Cancel</button>
+    <div style="display:flex; gap:10px">
+      <button id="download-qr" class="secondary">Download QR codes</button>
+      <button id="cancel-send" class="danger">Cancel</button>
+    </div>
 
     <details class="advanced">
       <summary>Advanced</summary>
@@ -101,7 +111,26 @@
       <div class="audio-progress-bar" id="audio-bar" style="width:0%"></div>
     </div>
     <p id="audio-send-status" class="hint">Playing sound…</p>
-    <button id="cancel-audio-send" class="danger">Cancel</button>
+    <div style="display:flex; gap:10px">
+      <button id="download-audio" class="secondary">Download audio</button>
+      <button id="cancel-audio-send" class="danger">Cancel</button>
+    </div>
+  </div>
+
+  <!-- Step 3c: Live mode -->
+  <div id="step-live" style="display:none; width:100%; align-items:center; flex-direction:column; gap:16px">
+    <div style="display:flex; gap:12px; align-items:center">
+      <span style="color:var(--muted)">Live via:</span>
+      <button id="live-transport-qr" class="selected">QR</button>
+      <button id="live-transport-audio">Audio</button>
+    </div>
+    <textarea id="live-text" placeholder="Type to broadcast live…" style="width:min(92vw, 560px); height:100px; resize:vertical"></textarea>
+    <div id="live-qr-view" class="qr-stage" style="display:none">
+      <canvas id="live-qr-canvas"></canvas>
+    </div>
+    <p id="live-audio-status" class="hint" style="display:none">Replaying as you type…</p>
+    <p class="hint">Updates live as you type — the receiver's Live view updates with it. Nothing is saved.</p>
+    <button id="live-stop" class="danger">Stop</button>
   </div>
 
   <script type="module" src="./main.ts"></script>

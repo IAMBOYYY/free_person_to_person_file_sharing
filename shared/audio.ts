@@ -3,6 +3,46 @@ import factory from "ggwave";
 let ggwave: any = null;
 let instance: any = null;
 
+// Real, verified frequency ranges (from ggwave's own source): audible
+// protocols use ~1875-6375 Hz (a fast electronic chirp, clearly audible to
+// normal human hearing — like an old modem or fax tone). Ultrasound
+// protocols use a ~15000 Hz base, at or beyond most adult hearing and many
+// phone speaker/mic frequency responses — by design, not a bug, if it seems
+// silent.
+export interface AudioProtocolOption {
+  label: string;
+  hint: string;
+}
+
+// Populated after initGgwave() since the real IDs come from the loaded module.
+export let AUDIO_PROTOCOLS: Record<string, AudioProtocolOption> = {};
+let protocolIds: Record<string, number> = {};
+
+export async function initGgwave() {
+  if (!ggwave) {
+    ggwave = await factory();
+    const params = ggwave.getDefaultParameters();
+    instance = ggwave.init(params);
+    protocolIds = {
+      AUDIBLE_NORMAL: ggwave.ProtocolId.GGWAVE_PROTOCOL_AUDIBLE_NORMAL,
+      AUDIBLE_FAST: ggwave.ProtocolId.GGWAVE_PROTOCOL_AUDIBLE_FAST,
+      AUDIBLE_FASTEST: ggwave.ProtocolId.GGWAVE_PROTOCOL_AUDIBLE_FASTEST,
+      ULTRASOUND_FAST: ggwave.ProtocolId.GGWAVE_PROTOCOL_ULTRASOUND_FAST,
+    };
+    AUDIO_PROTOCOLS = {
+      AUDIBLE_NORMAL: { label: "Normal (clearest, slowest)", hint: "Most reliable over distance/noise" },
+      AUDIBLE_FAST: { label: "Fast (default)", hint: "Good balance of speed and reliability" },
+      AUDIBLE_FASTEST: { label: "Fastest (higher pitch)", hint: "Quickest, needs a quiet room and close range" },
+      ULTRASOUND_FAST: { label: "Ultrasound (silent to most people)", hint: "Needs speaker/mic hardware that supports ~15kHz+" },
+    };
+  }
+  return instance;
+}
+
+export function protocolIdFor(key: string): number {
+  return protocolIds[key] ?? protocolIds.AUDIBLE_FAST!;
+}
+
 // ggwave's encode()/decode() exchange raw bytes through typed arrays whose
 // element type doesn't match their real meaning (this is how the library's
 // own official browser example does it — see ggwave/examples/buttons).
@@ -17,19 +57,13 @@ function convertTypedArray<T extends Int8ArrayConstructor | Uint8ArrayConstructo
   return new type(buffer) as InstanceType<T>;
 }
 
-export async function initGgwave() {
-  if (!ggwave) {
-    ggwave = await factory();
-    const params = ggwave.getDefaultParameters();
-    instance = ggwave.init(params);
-  }
-  return instance;
-}
-
-/** Encode payload bytes to a playable audio waveform (Float32Array, mono). */
-export function encodeAudio(payload: Uint8Array, protocol?: number): Float32Array {
+/** Encode payload bytes to a playable audio waveform (Float32Array, mono).
+ *  Note: the receiver does NOT need to know which protocolKey was used —
+ *  ggwave's decoder auto-detects among its known protocols by scanning for
+ *  each one's marker frequency. The picker only affects the sender. */
+export function encodeAudio(payload: Uint8Array, protocolKey?: string): Float32Array {
   if (!instance) throw new Error("ggwave not initialized");
-  const proto = protocol ?? ggwave.ProtocolId.GGWAVE_PROTOCOL_AUDIBLE_FAST;
+  const proto = protocolKey ? protocolIdFor(protocolKey) : protocolIdFor("AUDIBLE_FAST");
   const raw = ggwave.encode(instance, payload, proto, 50);
   return convertTypedArray(raw, Float32Array);
 }

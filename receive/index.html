@@ -15,6 +15,14 @@
       <button id="start-btn" style="flex:1">Start Camera</button>
       <button id="listen-btn" style="flex:1">Listen</button>
     </div>
+    <div style="display:flex; gap:12px; margin-top:10px">
+      <button id="upload-qr-btn" class="secondary" style="flex:1">Upload QR image(s)</button>
+      <button id="upload-audio-btn" class="secondary" style="flex:1">Upload audio file</button>
+    </div>
+    <input type="file" id="upload-qr-input" accept="image/png,image/jpeg,.zip" multiple style="display:none" />
+    <input type="file" id="upload-audio-input" accept="audio/*" style="display:none" />
+    <p id="upload-status" class="hint" style="display:none"></p>
+    <button id="live-receive-btn" class="secondary" style="width:100%; margin-top:10px">Live view (typing/speaking)</button>
     <p class="hint" style="margin-top:8px">Camera / microphone permission required. No data leaves your device.</p>
   </div>
 
@@ -39,6 +47,18 @@
     <p id="audio-receive-status" class="hint">Listening… No signal yet — try moving closer or reducing background noise.</p>
     <div id="audio-result"></div>
     <button id="stop-audio-btn" class="danger">Stop</button>
+  </div>
+
+  <!-- Live receive UI -->
+  <div id="step-live-receive" style="display:none; width:100%; align-items:center; flex-direction:column; gap:16px">
+    <div style="display:flex; gap:12px; align-items:center">
+      <span style="color:var(--muted)">Live via:</span>
+      <button id="live-recv-camera-btn" class="selected">Camera</button>
+      <button id="live-recv-mic-btn">Microphone</button>
+    </div>
+    <div class="preview" id="live-recv-camera-view"><video id="live-video" muted playsinline></video></div>
+    <div class="chat-bubble" id="live-recv-bubble"><div class="bubble-content">Waiting for live text…</div></div>
+    <button id="live-recv-stop" class="danger">Stop</button>
   </div>
 
   <!-- Private code overlay -->
