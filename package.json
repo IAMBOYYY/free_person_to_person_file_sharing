@@ -4,6 +4,15 @@
   "version": "1.1.0",
   "license": "MIT",
   "description": "Send files between two devices using only a screen and a camera — fountain-coded QR streaming, plus text messages and audio.",
+  "author": "IAMBOYYY",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/IAMBOYYY/free_person_to_person_file_sharing.git"
+  },
+  "homepage": "https://free-person-to-person-file-sharing.vercel.app",
+  "bugs": {
+    "url": "https://github.com/IAMBOYYY/free_person_to_person_file_sharing/issues"
+  },
   "type": "module",
   "scripts": {
     "dev": "vite",

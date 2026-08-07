@@ -482,40 +482,46 @@ async function startAudioSend(files: File[]) {
   finalPayload[0] = flags;
   finalPayload.set(payload, 1);
 
-  await initGgwave();
-  lastAudioPayload = finalPayload;
-  lastAudioProtocolKey = audioProtocolSelect.value || "AUDIBLE_FAST";
-  const waveform = encodeAudio(finalPayload, lastAudioProtocolKey);
-  const sampleRate = getSampleRate();
+  try {
+    // Create the context FIRST and read its REAL sample rate — browsers
+    // don't always honor a requested rate, so ggwave must be configured to
+    // match whatever the browser actually gave us, not the other way round.
+    if (!audioContext) audioContext = new AudioContext();
+    if (audioContext.state === "suspended") await audioContext.resume();
+    await initGgwave(audioContext.sampleRate);
 
-  // Play
-  if (!audioContext) audioContext = new AudioContext({ sampleRate });
-  if (audioContext.state === "suspended") await audioContext.resume();
-  const buffer = audioContext.createBuffer(1, waveform.length, sampleRate);
-  buffer.getChannelData(0).set(waveform);
-  const source = audioContext.createBufferSource();
-  source.buffer = buffer;
-  source.connect(audioContext.destination);
-  source.start();
+    lastAudioPayload = finalPayload;
+    lastAudioProtocolKey = audioProtocolSelect.value || "AUDIBLE_FAST";
+    const waveform = encodeAudio(finalPayload, lastAudioProtocolKey);
 
-  const totalDuration = waveform.length / sampleRate;
-  const startTime = audioContext.currentTime;
-  const updateProgress = () => {
-    if (!audioContext) return;
-    const elapsed = audioContext.currentTime - startTime;
-    const pct = Math.min(100, (elapsed / totalDuration) * 100);
-    audioBar.style.width = `${pct}%`;
-    if (pct < 100) requestAnimationFrame(updateProgress);
-    else audioStatus.textContent = "Done!";
-  };
-  requestAnimationFrame(updateProgress);
-  audioStatus.textContent = "Playing sound… hold receiving device's microphone close.";
-  try { await (navigator as any).wakeLock?.request("screen"); } catch {}
+    const buffer = audioContext.createBuffer(1, waveform.length, audioContext.sampleRate);
+    buffer.getChannelData(0).set(waveform);
+    const source = audioContext.createBufferSource();
+    source.buffer = buffer;
+    source.connect(audioContext.destination);
+    source.start();
 
-  source.onended = () => {
-    audioStatus.textContent = "Audio sent — check receiver.";
-    audioBar.style.width = "100%";
-  };
+    const totalDuration = waveform.length / audioContext.sampleRate;
+    const startTime = audioContext.currentTime;
+    const updateProgress = () => {
+      if (!audioContext) return;
+      const elapsed = audioContext.currentTime - startTime;
+      const pct = Math.min(100, (elapsed / totalDuration) * 100);
+      audioBar.style.width = `${pct}%`;
+      if (pct < 100) requestAnimationFrame(updateProgress);
+      else audioStatus.textContent = "Done!";
+    };
+    requestAnimationFrame(updateProgress);
+    audioStatus.textContent = "Playing sound… hold receiving device's microphone close.";
+    try { await (navigator as any).wakeLock?.request("screen"); } catch {}
+
+    source.onended = () => {
+      audioStatus.textContent = "Audio sent — check receiver.";
+      audioBar.style.width = "100%";
+    };
+  } catch (err) {
+    audioStatus.textContent = `✗ Audio playback failed: ${err instanceof Error ? err.message : err}`;
+  }
 }
 
 // --- Downloads ---
@@ -532,41 +538,65 @@ function triggerDownload(blob: Blob, filename: string) {
 
 downloadQrBtn.addEventListener("click", async () => {
   if (!lastEncoder || !lastHeader) return;
+  const k = lastHeader.k;
+  const frameCount = Math.max(k + 3, Math.ceil(k * 1.4));
+
+  if (frameCount > 40) {
+    const proceed = confirm(
+      `This needs about ${frameCount} QR codes to download reliably. ` +
+      `That'll take a little while to generate and isn't very practical to re-upload by hand — ` +
+      `for anything this size, using the live QR/camera transfer is usually much faster. Continue anyway?`
+    );
+    if (!proceed) return;
+  }
+
   downloadQrBtn.disabled = true;
   const originalLabel = downloadQrBtn.textContent;
-  downloadQrBtn.textContent = "Preparing…";
   try {
-    const k = lastHeader.k;
-    // Generous redundancy since a static download has no chance to "wait for
-    // one more frame" the way a live camera scan does — better to overshoot.
-    const frameCount = Math.max(k + 3, Math.ceil(k * 1.4));
     if (frameCount === 1) {
+      downloadQrBtn.textContent = "Preparing…";
       const bytes = packFrame({ ...lastHeader, seq: 0 }, lastEncoder.encode(0));
       const blob = await frameToPngBlob(bytes);
       triggerDownload(blob, "qr-code.png");
     } else {
       const files: Record<string, Uint8Array> = {};
       for (let seq = 0; seq < frameCount; seq++) {
+        downloadQrBtn.textContent = `Preparing… ${seq + 1}/${frameCount}`;
         const bytes = packFrame({ ...lastHeader, seq }, lastEncoder.encode(seq));
         const blob = await frameToPngBlob(bytes);
         files[`frame-${String(seq).padStart(4, "0")}.png`] = new Uint8Array(await blob.arrayBuffer());
+        // Yield to the browser periodically so the progress text actually
+        // repaints and the tab doesn't look frozen during a long batch.
+        if (seq % 5 === 0) await new Promise(r => setTimeout(r, 0));
       }
+      downloadQrBtn.textContent = "Zipping…";
       const zipped = zipSync(files);
       triggerDownload(new Blob([zipped as BlobPart], { type: "application/zip" }), "qr-codes.zip");
     }
   } catch (err) {
-    alert(`Couldn't prepare download: ${err}`);
+    alert(`Couldn't prepare download: ${err instanceof Error ? err.message : err}`);
   } finally {
     downloadQrBtn.disabled = false;
     downloadQrBtn.textContent = originalLabel;
   }
 });
 
-downloadAudioBtn.addEventListener("click", () => {
+downloadAudioBtn.addEventListener("click", async () => {
   if (!lastAudioPayload) return;
-  const waveform = encodeAudio(lastAudioPayload, lastAudioProtocolKey);
-  const blob = floatArrayToWavBlob(waveform, getSampleRate());
-  triggerDownload(blob, "message.wav");
+  downloadAudioBtn.disabled = true;
+  const originalLabel = downloadAudioBtn.textContent;
+  downloadAudioBtn.textContent = "Preparing…";
+  try {
+    await initGgwave(); // fine to reuse whatever rate is currently configured — a WAV file declares its own rate
+    const waveform = encodeAudio(lastAudioPayload, lastAudioProtocolKey);
+    const blob = floatArrayToWavBlob(waveform, getSampleRate());
+    triggerDownload(blob, "message.wav");
+  } catch (err) {
+    alert(`Couldn't prepare audio download: ${err instanceof Error ? err.message : err}`);
+  } finally {
+    downloadAudioBtn.disabled = false;
+    downloadAudioBtn.textContent = originalLabel;
+  }
 });
 
 // --- Live mode ---
@@ -605,19 +635,22 @@ async function sendLiveSnapshot() {
       width: Math.min(window.innerWidth - 64, 320),
     });
   } else {
-    await initGgwave();
-    const waveform = encodeAudio(frame, "AUDIBLE_FAST");
-    const sampleRate = getSampleRate();
-    if (!liveAudioContext) liveAudioContext = new AudioContext({ sampleRate });
-    if (liveAudioContext.state === "suspended") await liveAudioContext.resume();
-    if (liveAudioSource) { try { liveAudioSource.stop(); } catch {} }
-    const buffer = liveAudioContext.createBuffer(1, waveform.length, sampleRate);
-    buffer.getChannelData(0).set(waveform);
-    liveAudioSource = liveAudioContext.createBufferSource();
-    liveAudioSource.buffer = buffer;
-    liveAudioSource.connect(liveAudioContext.destination);
-    liveAudioSource.start();
-    liveAudioStatus.textContent = "Replaying as you type…";
+    try {
+      if (!liveAudioContext) liveAudioContext = new AudioContext();
+      if (liveAudioContext.state === "suspended") await liveAudioContext.resume();
+      await initGgwave(liveAudioContext.sampleRate);
+      const waveform = encodeAudio(frame, "AUDIBLE_FAST");
+      if (liveAudioSource) { try { liveAudioSource.stop(); } catch {} }
+      const buffer = liveAudioContext.createBuffer(1, waveform.length, liveAudioContext.sampleRate);
+      buffer.getChannelData(0).set(waveform);
+      liveAudioSource = liveAudioContext.createBufferSource();
+      liveAudioSource.buffer = buffer;
+      liveAudioSource.connect(liveAudioContext.destination);
+      liveAudioSource.start();
+      liveAudioStatus.textContent = "Replaying as you type…";
+    } catch (err) {
+      liveAudioStatus.textContent = `✗ ${err instanceof Error ? err.message : err}`;
+    }
   }
 }
 

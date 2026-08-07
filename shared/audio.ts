@@ -2,6 +2,7 @@ import factory from "ggwave";
 
 let ggwave: any = null;
 let instance: any = null;
+let currentSampleRate = 48000;
 
 // Real, verified frequency ranges (from ggwave's own source): audible
 // protocols use ~1875-6375 Hz (a fast electronic chirp, clearly audible to
@@ -18,11 +19,18 @@ export interface AudioProtocolOption {
 export let AUDIO_PROTOCOLS: Record<string, AudioProtocolOption> = {};
 let protocolIds: Record<string, number> = {};
 
-export async function initGgwave() {
+/**
+ * Initialize (or re-configure) ggwave. If you're about to play or record
+ * through a real AudioContext, pass its ACTUAL sample rate — read AFTER
+ * creating the context (audioContext.sampleRate), never a value you merely
+ * requested. Browsers don't always honor a requested AudioContext sample
+ * rate, and if ggwave's generated waveform doesn't match what actually
+ * plays it back, the result can be silent or badly pitch-shifted. This is
+ * the same pattern ggwave's own official browser example uses.
+ */
+export async function initGgwave(targetSampleRate?: number) {
   if (!ggwave) {
     ggwave = await factory();
-    const params = ggwave.getDefaultParameters();
-    instance = ggwave.init(params);
     protocolIds = {
       AUDIBLE_NORMAL: ggwave.ProtocolId.GGWAVE_PROTOCOL_AUDIBLE_NORMAL,
       AUDIBLE_FAST: ggwave.ProtocolId.GGWAVE_PROTOCOL_AUDIBLE_FAST,
@@ -36,6 +44,21 @@ export async function initGgwave() {
       ULTRASOUND_FAST: { label: "Ultrasound (silent to most people)", hint: "Needs speaker/mic hardware that supports ~15kHz+" },
     };
   }
+
+  const desired = targetSampleRate ?? currentSampleRate;
+  if (instance && desired === currentSampleRate) {
+    return instance; // already configured for this rate
+  }
+  if (instance) {
+    try { ggwave.free(instance); } catch { /* best effort */ }
+  }
+
+  const params = ggwave.getDefaultParameters();
+  params.sampleRateInp = desired;
+  params.sampleRateOut = desired;
+  params.sampleRate = desired;
+  instance = ggwave.init(params);
+  currentSampleRate = desired;
   return instance;
 }
 
@@ -79,5 +102,5 @@ export function decodeAudio(samples: Float32Array): Uint8Array | null {
 }
 
 export function getSampleRate(): number {
-  return instance ? ggwave.getDefaultParameters().sampleRate : 48000;
+  return currentSampleRate;
 }

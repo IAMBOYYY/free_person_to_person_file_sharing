@@ -20,26 +20,32 @@ export async function frameToPngBlob(bytes: Uint8Array, pixelsPerModule = 8): Pr
   const data = qr.modules.data;
   const total = size + 2 * MARGIN;
 
+  // Build the 1-pixel-per-module image in one pass via a raw pixel buffer —
+  // thousands of individual fillRect() calls (one per module) is what made
+  // this slow before; a single ImageData write plus one scaled draw is
+  // dramatically faster, same approach the live grid render already uses.
+  const small = document.createElement("canvas");
+  small.width = total;
+  small.height = total;
+  const smallCtx = small.getContext("2d")!;
+  const img = new ImageData(total, total);
+  const px = new Uint32Array(img.data.buffer);
+  px.fill(0xffffffff); // white, opaque (little-endian: 0xAABBGGRR)
+  for (let y = 0; y < size; y++) {
+    const row = (y + MARGIN) * total + MARGIN;
+    const src = y * size;
+    for (let x = 0; x < size; x++) {
+      if (data[src + x]) px[row + x] = 0xff000000; // black, opaque
+    }
+  }
+  smallCtx.putImageData(img, 0, 0);
+
   const canvas = document.createElement("canvas");
   canvas.width = total * pixelsPerModule;
   canvas.height = total * pixelsPerModule;
   const ctx = canvas.getContext("2d")!;
-  ctx.fillStyle = "#fff";
-  ctx.fillRect(0, 0, canvas.width, canvas.height);
-  ctx.fillStyle = "#000";
-  for (let y = 0; y < size; y++) {
-    const src = y * size;
-    for (let x = 0; x < size; x++) {
-      if (data[src + x]) {
-        ctx.fillRect(
-          (x + MARGIN) * pixelsPerModule,
-          (y + MARGIN) * pixelsPerModule,
-          pixelsPerModule,
-          pixelsPerModule
-        );
-      }
-    }
-  }
+  ctx.imageSmoothingEnabled = false; // keep QR edges crisp when upscaling
+  ctx.drawImage(small, 0, 0, canvas.width, canvas.height);
 
   return new Promise((resolve, reject) => {
     canvas.toBlob((blob) => (blob ? resolve(blob) : reject(new Error("PNG export failed"))), "image/png");

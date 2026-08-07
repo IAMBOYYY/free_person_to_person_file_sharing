@@ -195,10 +195,15 @@ async function startAudio() {
     return;
   }
 
-  await initGgwave();
-  const sampleRate = getSampleRate();
-  audioContext = new AudioContext({ sampleRate });
-  if (audioContext.state === "suspended") await audioContext.resume();
+  try {
+    audioContext = new AudioContext();
+    if (audioContext.state === "suspended") await audioContext.resume();
+    await initGgwave(audioContext.sampleRate);
+  } catch (err) {
+    audioStatus.textContent = `✗ Couldn't start audio: ${err instanceof Error ? err.message : err}`;
+    return;
+  }
+  const sampleRate = audioContext.sampleRate;
   const source = audioContext.createMediaStreamSource(audioStream);
   const scriptNode = audioContext.createScriptProcessor(4096, 1, 1);
   source.connect(scriptNode);
@@ -533,10 +538,16 @@ async function startLiveMic() {
     liveRecvBubbleContent.textContent = "✗ Microphone permission denied.";
     return;
   }
-  await initGgwave();
-  const sampleRate = getSampleRate();
-  liveRecvAudioContext = new AudioContext({ sampleRate });
-  if (liveRecvAudioContext.state === "suspended") await liveRecvAudioContext.resume();
+  let sampleRate: number;
+  try {
+    liveRecvAudioContext = new AudioContext();
+    if (liveRecvAudioContext.state === "suspended") await liveRecvAudioContext.resume();
+    await initGgwave(liveRecvAudioContext.sampleRate);
+    sampleRate = liveRecvAudioContext.sampleRate;
+  } catch (err) {
+    liveRecvBubbleContent.textContent = `✗ ${err instanceof Error ? err.message : err}`;
+    return;
+  }
   const source = liveRecvAudioContext.createMediaStreamSource(liveRecvAudioStream);
   liveRecvScriptNode = liveRecvAudioContext.createScriptProcessor(4096, 1, 1);
   source.connect(liveRecvScriptNode);
