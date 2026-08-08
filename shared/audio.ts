@@ -46,10 +46,10 @@ export async function initGgwave(targetSampleRate?: number) {
   }
 
   const desired = targetSampleRate ?? currentSampleRate;
-  if (instance && desired === currentSampleRate) {
+  if (instance !== null && desired === currentSampleRate) {
     return instance; // already configured for this rate
   }
-  if (instance) {
+  if (instance !== null) {
     try { ggwave.free(instance); } catch { /* best effort */ }
   }
 
@@ -85,7 +85,7 @@ function convertTypedArray<T extends Int8ArrayConstructor | Uint8ArrayConstructo
  *  ggwave's decoder auto-detects among its known protocols by scanning for
  *  each one's marker frequency. The picker only affects the sender. */
 export function encodeAudio(payload: Uint8Array, protocolKey?: string): Float32Array {
-  if (!instance) throw new Error("ggwave not initialized");
+  if (instance === null) throw new Error("ggwave not initialized");
   const proto = protocolKey ? protocolIdFor(protocolKey) : protocolIdFor("AUDIBLE_FAST");
   const raw = ggwave.encode(instance, payload, proto, 50);
   return convertTypedArray(raw, Float32Array);
@@ -93,7 +93,7 @@ export function encodeAudio(payload: Uint8Array, protocolKey?: string): Float32A
 
 /** Decode captured mic samples (Float32Array). Returns bytes, or null if no valid signal yet. */
 export function decodeAudio(samples: Float32Array): Uint8Array | null {
-  if (!instance) throw new Error("ggwave not initialized");
+  if (instance === null) throw new Error("ggwave not initialized");
   const res = ggwave.decode(instance, convertTypedArray(samples, Int8Array));
   if (res && res.length > 0) {
     return convertTypedArray(res, Uint8Array);
